@@ -1,7 +1,3 @@
 # Farm (name subject to change)
 
-## Quick start
-
-```console
-cabal run
-```
+To play, use `cabal run`
