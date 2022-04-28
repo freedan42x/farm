@@ -1,1 +1,7 @@
-# farm-name-subject-to-change-
+# Farm (name subject to change)
+
+## Quick start
+
+```console
+cabal run
+```
