@@ -1,60 +1,39 @@
 module Quests where
 
-import           Brick.Widgets.Core
 import           Brick.Widgets.List
 import           Lens.Micro
 import qualified Data.Vector                   as V
-import           Data.List
 
 import           Types
 import           Util
 import           Info
+import           Perk
 
 
-toQuest :: QuestId -> Quest
-toQuest i = case find (\quest -> quest ^. qid == i) allQuests of
-  Just quest -> quest
-  _          -> error $ "There is no quest with id " <> show i
+canComplete :: Game -> Quest -> Bool
+canComplete game quest = case quest ^. qtype of
+  SubmitQuest comps ->
+    and $ map (\(comp, req) -> componentCount game comp >= req) comps
 
-addQuests :: [QuestId] -> Game -> Game
-addQuests qIds game =
-  game
-    &  quests
-    %~ (  listReplace
-           (listElements (game ^. quests) <> V.fromList (map toQuest qIds))
-       $  listSelected
-       $  game
-       ^. quests
-       )
+completeQuest :: Game -> Quest -> Game
+completeQuest game quest = case quest ^. qtype of
+  SubmitQuest comps ->
+    game
+      &  (quest ^. afterCompletion)
+      &  modifyComponents (map (_2 %~ flip (-)) comps)
+      &  quests
+      %~ listUpdate
+           (listElements (game ^. quests) <> V.fromList (quest ^. nextQuests))
+      &  quests
+      %~ listDeleteWith (quest ==)
 
 submitQuest
-  :: QuestId
-  -> [QuestId]
-  -> String
-  -> (Game -> Game)
-  -> [(RecipeComponent, Int)]
-  -> Quest
-submitQuest i qIds rewDesc rew comps = Quest
-  { _qid         = i
-  , _desc        = \sel game -> hBox
-                     [ str "Сдать "
-                     , hBox
-                     $ map
-                         (\(j, (comp, k)) ->
-                           componentProgress sel game comp k
-                             <+> (if j /= length comps then str ", " else emptyWidget)
-                         )
-                     $ zip [1 ..] comps
-                     ]
-  , _rewardDesc  = rewDesc
-  , _reward      = \game ->
-                     game
-                       & rew
-                       & modifyComponents (map (_2 %~ flip (-)) comps)
-                       & addQuests qIds
-  , _canComplete = \game ->
-    and $ map (\(comp, req) -> componentCount game comp >= req) comps
-  }
+  :: [(RecipeComponent, Int)] -> String -> (Game -> Game) -> [Quest] -> Quest
+submitQuest comps rewDesc afterCompl qs = Quest { _qtype = SubmitQuest comps
+                                                , _rewardDesc      = rewDesc
+                                                , _afterCompletion = afterCompl
+                                                , _nextQuests      = qs
+                                                }
 
 unlockCulture :: Culture -> Game -> Game
 unlockCulture cult game =
@@ -65,59 +44,28 @@ unlockCulture cult game =
 unlockSoil :: Int -> Game -> Game
 unlockSoil i game = game & soils %~ (& ix i %~ locked .~ False)
 
--- if I don't have that perk, insert it. otherwise update the level
-unlockPerk :: Culture -> Int -> Game -> Game
-unlockPerk cult level game =
-  let els = game ^. perks ^. listElementsL
-  in  case
-          V.findIndex
-            (\case
-              CulturePerk cult' _ _ -> cult == cult'
-              _                     -> False
-            )
-            els
-        of
-          Just i -> game & perks %~ listUpdate
-            (els V.// [(i, CulturePerk cult level _)])
-          _ -> _ -- insert
+unlockCultureQuest :: Culture -> [Quest] -> [(RecipeComponent, Int)] -> Quest
+unlockCultureQuest cult qs comps = submitQuest
+  comps
+  ("Открывает " <> name cult)
+  (unlockCulture cult . unlockPerk (initCulturePerk cult))
+  qs
 
-allQuests :: [Quest]
-allQuests =
-  [ submitQuest (QCulture 0)
-                [QCulture 1, QCultureMilestone 0]
-                "Открывает Картофель"
-                (unlockCulture Potato)
-      $ rcults [Weed ~= 7]
-    , submitQuest (QCulture 1)
-                  [QCulture 2]
-                  "Открывает Пшеница"
-                  (unlockCulture Wheat)
-      $ rcults [Potato ~= 6]
-    , submitQuest (QCulture 2)
-                  [QCulture 3]
-                  "Открывает Свекла"
-                  (unlockCulture Beetroot)
-      $ rcults [Wheat ~= 5]
-    , submitQuest (QCulture 3) [QCulture 4] "Открывает Рис" (unlockCulture Rice)
-      $ ritems [FireEssence ~= 2]
-    , submitQuest (QCulture 4)
-                  [QCulture 5]
-                  "Открывает Гречка"
-                  (unlockCulture Buckwheat)
-      $ ritems [Coal ~= 1]
-    , submitQuest (QCulture 5) [QCulture 6] "Открывает Горох" (unlockCulture Peas)
-      $ ritems [Cobblestone ~= 1]
-    , submitQuest (QCulture 6) [] "Открывает Брокколи" (unlockCulture Broccoli)
-      $ ritems [Dust ~= 1]
-    ]
-    <> [ submitQuest (QSoil 0) [QSoil 1] "Открывает Грядка #2" (unlockSoil 1)
-         $ rmoney [G ~= 150]
-       , submitQuest (QSoil 1) []        "Открывает Грядка #3" (unlockSoil 2)
-         $ rmoney [G ~= 500]
-       ]
-    <> [ submitQuest (QCultureMilestone 0)
-                     []
-                     "Перк Сорняк I"
-                     (unlockPerk Weed 1)
-           $ rcults [Weed ~= 20]
-       ]
+unlockSoilQuest :: Int -> [Quest] -> [(RecipeComponent, Int)] -> Quest
+unlockSoilQuest num qs comps =
+  submitQuest comps ("Открывает Грядка #" <> show num) (unlockSoil (num - 1)) qs
+
+cultChainQuest :: Quest
+cultChainQuest = potato where
+  potato    = unlockCultureQuest Potato [wheat] $ rcults [Weed ~= 7]
+  wheat     = unlockCultureQuest Wheat [beetroot] $ rcults [Potato ~= 6]
+  beetroot  = unlockCultureQuest Beetroot [rice] $ rcults [Wheat ~= 5]
+  rice      = unlockCultureQuest Rice [buckwheat] $ ritems [FireEssence ~= 2]
+  buckwheat = unlockCultureQuest Buckwheat [peas] $ ritems [Coal ~= 1]
+  peas      = unlockCultureQuest Peas [broccoli] $ ritems [Cobblestone ~= 1]
+  broccoli  = unlockCultureQuest Broccoli [] $ ritems [Dust ~= 1]
+
+soilChainQuest :: Quest
+soilChainQuest = soil2 where
+  soil2 = unlockSoilQuest 2 [soil3] $ rmoney [G ~= 150]
+  soil3 = unlockSoilQuest 3 [] $ rmoney [G ~= 500]

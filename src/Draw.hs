@@ -11,6 +11,8 @@ import qualified Data.Vector                   as V
 import           Types
 import           Info
 import           Util
+import           Perk
+import           Recipes
 
 
 selectedMenu :: Bool -> Widget Name -> Widget Name
@@ -29,6 +31,38 @@ selectedBorderLabel :: Bool -> Widget Name -> Widget Name -> Widget Name
 selectedBorderLabel True label = overrideAttr borderAttr ("selected-menu")
   . borderWithLabel (withAttr "selected-menu" label)
 selectedBorderLabel False label = borderWithLabel label
+
+widgetIf :: Bool -> Widget Name -> Widget Name
+widgetIf True  = id
+widgetIf False = const emptyWidget
+
+componentProgress :: Bool -> Game -> RecipeComponent -> Int -> Widget Name
+componentProgress sel game comp need =
+  let
+    have = componentCount game comp
+    prog = if have >= need
+      then
+        withAttr
+          ( attrName
+          $ (if sel then ("selected-" <>) else id)
+          $ "component-enough"
+          )
+        $ str
+        $ show need
+      else
+        withAttr
+          ( attrName
+          $ (if sel then ("selected-" <>) else id)
+          $ "component-not-enough"
+          )
+        $  str
+        $  show have
+        <> "/"
+        <> show need
+  in
+    case comp of
+      RCurrency k -> hBox [prog, str $ " " <> name k]
+      _           -> hBox [str $ name comp, str "(", prog, str ")"]
 
 drawSoil :: Game -> Int -> Widget Name
 drawSoil game i =
@@ -123,6 +157,18 @@ drawInventory game =
     , padRight (Pad 1) $ padLeft Max $ str $ show (sellPrice k) <> " G"
     ]
 
+drawQuestDesc :: Game -> Quest -> Bool -> Widget Name
+drawQuestDesc game quest sel = case quest ^. qtype of
+  SubmitQuest comps -> hBox
+    [ str "Сдать "
+    , hBox
+    $ map
+        (\(i, (comp, k)) -> componentProgress sel game comp k
+          <+> widgetIf (i /= length comps) (str ", ")
+        )
+    $ zip [1 ..] comps
+    ]
+
 drawQuests :: Game -> Widget Name
 drawQuests game =
   joinBorders
@@ -134,7 +180,7 @@ drawQuests game =
     [ selected (sel && game ^. curMenu == Quests)
     $ padLeft (Pad 1)
     $ padRight Max
-    $ (quest ^. desc) (sel && game ^. curMenu == Quests) game
+    $ drawQuestDesc game quest (sel && game ^. curMenu == Quests)
     , withAttr "star" $ str $ " *  " <> quest ^. rewardDesc
     , if i + 1 == (game ^. quests ^. listElementsL & V.length)
       then emptyWidget
@@ -179,19 +225,74 @@ drawAlchemy game =
           else hBorder
         ]
 
+cat :: String
+cat = unlines
+  [ "                   _ |\\_"
+  , "                   \\` ..\\"
+  , "              __,.-\" =__Y="
+  , "            .\"        )"
+  , "      _    /   ,    \\/\\_"
+  , "     ((____|    )_-\\ \\_-`"
+  , "     `-----'`-----` `--`"
+  ]
+
 drawPerks :: Game -> Widget Name
-drawPerks game = _
+drawPerks game =
+  joinBorders
+    $ setAvailableSize (75, 20)
+    $ selectedBorderLabel (game ^. curMenu == Perks) (str "Перки")
+    $ hBox
+        [ renderList draw (game ^. curMenu == Perks) (game ^. perks)
+        , vBorder
+        , padLeft (Pad 1) $ vBox
+          [ strWrap $ game ^. perks & listSelectedElement & maybe
+            ""
+            (\(_, perk) -> perkDesc $ perk ^. ptype)
+          , center $ str cat
+          ]
+        ]
+ where
+  draw sel perk =
+    (if sel && game ^. curMenu == Perks then withAttr "selected" else id) $ hBox
+      [ padLeft (Pad 1)
+      $  padRight Max
+      $  hLimit (textWidth $ name $ perk ^. ptype)
+      $  progressBar (Just $ name $ perk ^. ptype)
+      $  perk
+      ^. ppassed
+      /  timeTaken (perk ^. ptype)
+      , padLeft Max
+      $  padRight (Pad 1)
+      $  str
+      $  "("
+      <> show (perk ^. phave)
+      <> "/"
+      <> show (submitCount $ perk ^. ptype)
+      <> ")"
+      ]
 
 drawAlert :: Game -> Widget Name
 drawAlert game =
-  marginLeft (Pad 1) $ marginRight (Pad 1) $ hCenter $ str $ game ^. alertMsg
+  marginTop (Pad 4) $ withAttr "alert" $ hCenterLayer $ str $ game ^. alertMsg
+
+drawControls :: Widget Name
+drawControls = marginBottom (Pad 2) $ marginTop Max $ marginLeft (Pad 3) $ vBox
+  [ str "Z/X           Выбрать/Отменить"
+  , str "[←↑→↓]        Навигация"
+  , str "Shift+[←↑→↓]  Смена фокуса"
+  , str "[123]         Компонент алхимии"
+  , str "C             Перки"
+  ]
 
 drawUI :: Game -> [Widget Name]
 drawUI game =
-  [ marginTop (Pad 1) $ withAttr "alert" $ drawAlert game
-  , if game ^. curMenu == Plant
-    then hCenterFarm (55 + 62 + 4) 55 $ vCenterT $ drawPlant game
-    else emptyWidget
+  [ drawControls
+  , drawAlert game
+  , widgetIf (game ^. curMenu == Perks) $ centerLayer $ drawPerks game
+  , widgetIf (game ^. curMenu == Plant)
+    $ hCenterFarm (55 + 62 + 4) 55
+    $ vCenterLayer
+    $ drawPlant game
   , border $ center $ hBox
     [ drawFarm game
     , padLeft (Pad 2) $ vBox

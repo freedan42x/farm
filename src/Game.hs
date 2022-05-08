@@ -2,34 +2,63 @@ module Game where
 
 import           Brick.Widgets.List
 import           Lens.Micro
+import qualified Data.Vector                   as V
 
 import           Types
 import           Util
 import           Info
+import           Quests
+import           Perk
 
 
 tickStep :: Game -> Game
 tickStep game =
-  let alertDone = game ^. alertTime & (0 >=)
+  let stepSoils = soils %~ map
+        (progress %~ \case
+          SDone cult -> SDone cult
+          SGrowing cult passed | passed >= timeTaken cult -> SDone cult
+                               | otherwise -> SGrowing cult (passed + 0.1)
+          SNone -> SNone
+        )
+
+      alertDone   = game ^. alertTime & (0 >=)
+      stepAlert   = if alertDone then alertMsg .~ "" else alertTime -~ 0.1
+
+      stepRecipes = recipes %~ fmap
+        (\entry -> entry & aprogress %~ \case
+          CDone -> CDone
+          CCrafting passed | passed >= timeTaken (entry ^. craftedItem) -> CDone
+                           | otherwise -> CCrafting (passed + 0.1)
+          CNone -> CNone
+        )
+
+      donePerks =
+          game
+            ^.  perks
+            ^.  listElementsL
+            &   V.filter (\perk -> perk ^. ppassed >= timeTaken perk)
+            <&> (\perk -> (RCulture $ perk ^. ptype ^. pculture, (+ 1)))
+
+      stepDonePerks = modifyComponents $ V.toList donePerks
+
+      stepPerks     = perks %~ fmap
+        (\perk -> if perk ^. ppassed >= timeTaken perk
+          then perk & ppassed .~ 0
+          else perk & ppassed +~ 0.1
+        )
+
+      stepUnlockPerks = perks %~ fmap
+        (\perk -> if perk ^. phave >= submitCount (perk ^. ptype)
+          then perk & ptype %~ (plevel +~ 1) & ppassed .~ 0
+          else perk
+        )
   in  game
-        &  soils
-        %~ map
-             (progress %~ \case
-               SDone cult -> SDone cult
-               SGrowing cult passed | passed >= timeTaken cult -> SDone cult
-                                    | otherwise -> SGrowing cult (passed + 0.1)
-               SNone -> SNone
-             )
-        &  (if alertDone then alertMsg .~ "" else alertTime %~ (subtract 0.1))
-        &  recipes
-        %~ fmap
-             (\entry -> entry & aprogress %~ \case
-               CDone -> CDone
-               CCrafting passed
-                 | passed >= timeTaken (entry ^. craftedItem) -> CDone
-                 | otherwise -> CCrafting (passed + 0.1)
-               CNone -> CNone
-             )
+        & stepSoils
+        & stepAlert
+        & stepRecipes
+        & stepDonePerks
+        & stepUnlockPerks
+        & stepPerks
 
 checkSoil :: Game -> Game
 checkSoil game =
@@ -91,36 +120,18 @@ sellComponent game = if game ^. curInvSection == ICultures
     ^. items
     &  listSelectedElement
 
-completeQuest :: Game -> Game
-completeQuest game = case game ^. quests & listSelectedElement of
-  Just (i, quest) -> if (quest ^. canComplete) game
-    then (quest ^. reward) game & quests %~ listRemove i
+doQuest :: Game -> Game
+doQuest game = case game ^. quests & listSelectedElement of
+  Just (_, quest) -> if canComplete game quest
+    then completeQuest game quest
     else alert game "Не выполнены все условия"
   _ -> game
 
-canCraft :: Game -> Item -> Bool
-canCraft game item =
-  and $ map (\(comp, req) -> componentCount game comp >= req) $ snd $ recipe
-    item
-
-craftItem :: Game -> Item -> Game
-craftItem game item =
-  game
-    &  modifyComponents (map (_2 %~ flip (-)) $ snd $ recipe item)
-    &  recipes
-    %~ listModify (aprogress .~ CCrafting 0)
-
-doAlchemy :: Game -> Game
-doAlchemy game = case game ^. recipes & listSelectedElement of
-  Just (_, entry) -> case entry ^. aprogress of
-    CDone ->
-      game
-        &  modifyItem (entry ^. craftedItem)
-                      (+ (fst $ recipe $ entry ^. craftedItem))
-        &  recipes
-        %~ listModify (aprogress .~ CNone)
-    CCrafting _ -> game
-    CNone       -> if entry ^. craftedItem & canCraft game
-      then craftItem game (entry ^. craftedItem)
-      else alert game "Не хватает ингредиентов"
+doPerks :: Game -> Game
+doPerks game = case game ^. perks & listSelectedElement of
+  Just (_, perk) -> case perk ^. ptype of
+    CulturePerk cult _ -> if cultureCount game cult > 0
+      then game & modifyCulture cult (subtract 1) & perks %~ listModify
+        (phave +~ 1)
+      else alert game $ "Не хватает " <> name cult
   _ -> game

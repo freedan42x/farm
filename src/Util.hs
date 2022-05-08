@@ -3,7 +3,6 @@ module Util where
 
 import           Graphics.Vty.Image
 import           Brick.Types
-import           Brick.AttrMap
 import           Brick.Widgets.Core
 import           Brick.Widgets.List
 import           Lens.Micro
@@ -11,8 +10,19 @@ import           Data.Maybe
 import qualified Data.Vector                   as V
 
 import           Types
-import           Info
 
+
+rcults :: [(Culture, Int)] -> [(RecipeComponent, Int)]
+rcults = map $ _1 %~ RCulture
+
+ritems :: [(Item, Int)] -> [(RecipeComponent, Int)]
+ritems = map $ _1 %~ RItem
+
+rmoney :: [(Currency, Int)] -> [(RecipeComponent, Int)]
+rmoney = map $ _1 %~ RCurrency
+
+(~=) :: a -> Int -> (a, Int)
+(~=) = (,)
 
 farmMoveLeft, farmMoveRight, farmMoveUp, farmMoveDown :: Game -> Game
 farmMoveLeft = soilIx %~ (\x -> if x `notElem` [0, 3, 6] then x - 1 else x)
@@ -39,33 +49,10 @@ componentCount game = \case
   RCurrency G -> game ^. gold
   RCurrency R -> game ^. rubies
 
-componentProgress :: Bool -> Game -> RecipeComponent -> Int -> Widget Name
-componentProgress sel game comp need =
-  let
-    have = componentCount game comp
-    prog = if have >= need
-      then
-        withAttr
-          ( attrName
-          $ (if sel then ("selected-" <>) else id)
-          $ "component-enough"
-          )
-        $ str
-        $ show need
-      else
-        withAttr
-          ( attrName
-          $ (if sel then ("selected-" <>) else id)
-          $ "component-not-enough"
-          )
-        $  str
-        $  show have
-        <> "/"
-        <> show need
-  in
-    case comp of
-      RCurrency k -> hBox [prog, str $ " " <> name k]
-      _           -> hBox [str $ name comp, str "(", prog, str ")"]
+listDeleteWith :: (e -> Bool) -> List n e -> List n e
+listDeleteWith p l = case V.findIndex p (l ^. listElementsL) of
+  Just i -> listRemove i l
+  _      -> l
 
 listUpdateAt
   :: (Ord k, Eq e) => k -> e -> (e -> e) -> List n (k, e) -> List n (k, e)
@@ -147,13 +134,17 @@ marginTop padding p =
             offset  = Location (0, offsetY)
         return $ addResultOffset offset $ result & imageL %~ translateY offsetY
 
-vCenterT :: Widget n -> Widget n
-vCenterT p = Widget (hSize p) (vSize p) $ do
-  c <- getContext
-  let h = (c ^. availHeightL) `div` 2
-  result <- render $ vLimit h p
-  let h' = h - imageHeight (result ^. imageL) `div` 2 - 1
-  pure $ addResultOffset (Location (0, h')) $ result & imageL %~ translateY h'
+marginBottom :: Padding -> Widget a -> Widget a
+marginBottom padding p =
+  let (f, sz) = case padding of
+        Max   -> (id, Greedy)
+        Pad i -> (const i, vSize p)
+  in  Widget (hSize p) sz $ do
+        (h, lim) <- calculateLim padding availHeightL
+        result   <- render $ vLimit lim p
+        let childHeight = result ^. imageL . to imageHeight
+            height      = childHeight + f (h - childHeight)
+        return $ result & imageL %~ resizeHeight height
 
 hCenterFarm :: Int -> Int -> Widget n -> Widget n
 hCenterFarm allWidgetsOccupiedWidth farmWidth p =
