@@ -15,26 +15,6 @@ canComplete game quest = case quest ^. qtype of
   SubmitQuest comps ->
     and $ map (\(comp, req) -> componentCount game comp >= req) comps
 
-completeQuest :: Game -> Quest -> Game
-completeQuest game quest = case quest ^. qtype of
-  SubmitQuest comps ->
-    game
-      &  (quest ^. afterCompletion)
-      &  modifyComponents (map (_2 %~ flip (-)) comps)
-      &  quests
-      %~ listUpdate
-           (listElements (game ^. quests) <> V.fromList (quest ^. nextQuests))
-      &  quests
-      %~ listDeleteWith (quest ==)
-
-submitQuest
-  :: [(RecipeComponent, Int)] -> String -> (Game -> Game) -> [Quest] -> Quest
-submitQuest comps rewDesc afterCompl qs = Quest { _qtype = SubmitQuest comps
-                                                , _rewardDesc      = rewDesc
-                                                , _afterCompletion = afterCompl
-                                                , _nextQuests      = qs
-                                                }
-
 unlockCulture :: Culture -> Game -> Game
 unlockCulture cult game =
   game
@@ -44,16 +24,38 @@ unlockCulture cult game =
 unlockSoil :: Int -> Game -> Game
 unlockSoil i game = game & soils %~ (& ix i %~ locked .~ False)
 
+rewardToFunction :: QuestReward -> Game -> Game
+rewardToFunction = \case
+  UnlockCulture cult -> unlockCulture cult . unlockPerk (initCulturePerk cult)
+  UnlockSoil    num  -> unlockSoil num
+
+completeQuest :: Game -> Quest -> Game
+completeQuest game quest = case quest ^. qtype of
+  SubmitQuest comps ->
+    game
+      &  rewardToFunction (quest ^. reward)
+      &  modifyComponents (map (_2 %~ flip (-)) comps)
+      &  quests
+      %~ listUpdate
+           (listElements (game ^. quests) <> V.fromList (quest ^. nextQuests))
+      &  quests
+      %~ listDeleteWith (quest ==)
+
 unlockCultureQuest :: Culture -> [Quest] -> [(RecipeComponent, Int)] -> Quest
-unlockCultureQuest cult qs comps = submitQuest
-  comps
-  ("Открывает " <> name cult)
-  (unlockCulture cult . unlockPerk (initCulturePerk cult))
-  qs
+unlockCultureQuest cult qs comps = Quest
+  { _qtype      = SubmitQuest comps
+  , _rewardDesc = "Открывает " <> name cult
+  , _reward     = UnlockCulture cult
+  , _nextQuests = qs
+  }
 
 unlockSoilQuest :: Int -> [Quest] -> [(RecipeComponent, Int)] -> Quest
-unlockSoilQuest num qs comps =
-  submitQuest comps ("Открывает Грядка #" <> show num) (unlockSoil (num - 1)) qs
+unlockSoilQuest num qs comps = Quest
+  { _qtype      = SubmitQuest comps
+  , _rewardDesc = "Открывает Грядка #" <> show num
+  , _reward     = UnlockSoil $ num - 1
+  , _nextQuests = qs
+  }
 
 cultChainQuest :: Quest
 cultChainQuest = potato where

@@ -33,6 +33,9 @@ farmMoveDown = soilIx %~ (\x -> if x < 6 then x + 3 else x)
 listUpdate :: V.Vector e -> List n e -> List n e
 listUpdate v l = listReplace v (listSelected l) l
 
+listSnoc :: e -> List n e -> List n e
+listSnoc x l = listInsert (V.length $ l ^. listElementsL) x l
+
 listLookup :: Eq k => List n (k, e) -> k -> Maybe e
 listLookup l k = fmap snd $ V.find ((k ==) . fst) $ l ^. listElementsL
 

@@ -19,12 +19,16 @@ executable farm
                      , Alchemy
                      , Recipes
                      , Perk
+                     , LoadMenu
   hs-source-dirs:      src
   ghc-options:         -threaded -Wall -Wextra -Wno-type-defaults
   default-extensions:  LambdaCase
                      , TemplateHaskell
                      , OverloadedStrings
                      , TupleSections
+                     , DeriveGeneric
+                     , TypeSynonymInstances
+                     , FlexibleInstances
   build-depends:       base >=4.12 && <4.13
                      , brick
                      , vty
@@ -33,4 +37,7 @@ executable farm
                      , containers
                      , random
                      , vector
+                     , binary
+                     , directory
+                     , text
   default-language:    Haskell2010

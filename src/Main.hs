@@ -1,23 +1,27 @@
 module Main where
 
 import           Brick
+import           Brick.Forms
 import           Brick.BChan
 import           Brick.Widgets.List
+import           Brick.Widgets.Dialog
 import           Brick.Widgets.ProgressBar
 import           Graphics.Vty
 import           Control.Monad
+import           Control.Monad.IO.Class
 import           Control.Concurrent
 import           Lens.Micro
-import qualified Data.Vector                   as V
+import qualified Data.Text                     as T
 import           Data.Char
+import           System.Exit
+import           System.Directory
 
+import           LoadMenu
 import           Types
 import           Util
 import           Draw
 import           Game
-import           Quests
 import           Alchemy
-import           Perk
 
 
 handleEvent :: Game -> BrickEvent Name GameEvent -> EventM Name (Next Game)
@@ -33,29 +37,37 @@ handleEvent game (VtyEvent e) = case e of
     Quests    -> Alchemy
     other     -> other
 
-  EvKey KDown       [MShift] -> continue $ game & curMenu .~ Quests
-  EvKey KUp         [MShift] -> continue $ game & curMenu .~ Inventory
+  EvKey KDown [MShift] -> continue $ game & curMenu .~ Quests
+  EvKey KUp [MShift] -> continue $ game & curMenu .~ Inventory
 
-  EvKey (KChar 'z') []       -> continue $ case game ^. curMenu of
-    Farm      -> checkSoil game
-    Plant     -> plantCulture game
-    Inventory -> sellComponent game
-    Quests    -> doQuest game
-    Alchemy   -> doAlchemy game
-    Perks     -> doPerks game
+  EvKey (KChar k) [] | k `elem` ['z', 'я'] -> case game ^. curMenu of
+    Farm      -> continue $ checkSoil game
+    Plant     -> continue $ plantCulture game
+    Inventory -> continue $ sellComponent game
+    Quests    -> continue $ doQuest game
+    Alchemy   -> continue $ doAlchemy game
+    Perks     -> continue $ doPerks game
+    Quit      -> case game ^. quitDialog & dialogSelection of
+      Just True -> do
+        liftIO $ saveGame game
+        halt game
+      _ -> continue $ game & curMenu .~ (game ^. prevMenuQuit)
 
-  EvKey (KChar 'x') [] -> continue $ case game ^. curMenu of
+  EvKey (KChar k) [] | k `elem` ['x', 'ч'] -> continue $ case game ^. curMenu of
     Plant -> game & curMenu .~ Farm
     Perks -> game & curMenu .~ (game ^. prevMenu)
+    Quit  -> game & curMenu .~ (game ^. prevMenuQuit)
     _     -> game
 
-  EvKey (KChar 'c') [] -> continue $ case game ^. curMenu of
+  -- These are two different "c"`s btw v
+  EvKey (KChar k) [] | k `elem` ['c', 'с'] -> continue $ case game ^. curMenu of
     Perks -> game
     _     -> game & prevMenu .~ (game ^. curMenu) & curMenu .~ Perks
 
-  EvKey (KChar 'q') [] -> halt game
+  EvKey (KChar k) [] | k `elem` ['q', 'й'] ->
+    continue $ game & prevMenuQuit .~ (game ^. curMenu) & curMenu .~ Quit
 
-  ev                   -> case game ^. curMenu of
+  ev -> case game ^. curMenu of
     Farm -> continue $ case ev of
       EvKey KLeft  [] -> farmMoveLeft game
       EvKey KRight [] -> farmMoveRight game
@@ -87,6 +99,9 @@ handleEvent game (VtyEvent e) = case e of
     Perks -> do
       newPerks <- handleListEvent ev $ game ^. perks
       continue $ game & perks .~ newPerks
+    Quit -> do
+      newQuitDialog <- handleDialogEvent ev $ game ^. quitDialog
+      continue $ game & quitDialog .~ newQuitDialog
 
 handleEvent game (AppEvent Tick) = continue $ tickStep game
 handleEvent game _               = continue game
@@ -117,33 +132,65 @@ app = App
           ]
   }
 
-initSoil :: Soil
-initSoil = Soil { _progress = SNone, _locked = True }
+handleLoadMenuEvent
+  :: LoadMenuState
+  -> BrickEvent LoadMenuName LmsEvent
+  -> EventM LoadMenuName (Next LoadMenuState)
+handleLoadMenuEvent lms e'@(VtyEvent e) = case lms ^. lmsCurMenu of
+  LoadMenu -> case e of
+    EvKey (KChar k) [] | k `elem` ['q', 'й'] -> halt $ lms & quit .~ True
 
-initGame :: Game
-initGame = Game
-  { _gold             = 5000
-  , _rubies           = 0
-  , _soils            = (initSoil & locked .~ False) : replicate 8 initSoil
-  , _soilIx           = 0
-  , _curMenu          = Farm
-  , _prevMenu         = Farm
-  , _curInvSection    = ICultures
-  , _alertMsg         = ""
-  , _alertTime        = 0
-  , _cultures         = list NCultures (V.fromList []) 1
-  , _unlockedCultures = list NPlant (V.fromList [Weed]) 1
-  , _quests = list NQuests (V.fromList [cultChainQuest, soilChainQuest]) 2
-  , _recipes          = list
-                          NAlchemy
-                          (V.fromList $ map initAlchemyEntry $ enumFrom GrowthEssence)
-                          4
-  , _items            = list NItems (V.fromList []) 1
-  , _perks            = list NPerks (V.fromList [initCulturePerk Weed]) 1
+    EvKey (KChar k) [] | k `elem` ['z', 'я'] ->
+      case lms ^. saveFiles & listSelectedElement of
+        Just (_, svName) -> do
+          game <- liftIO $ loadGame svName
+          halt $ lms & selectedSave .~ game
+        _ -> continue lms
+
+    EvKey (KChar k) [] | k `elem` ['m', 'ь'] ->
+      continue $ lms & lmsCurMenu .~ CreateSave
+
+    ev -> do
+      newSaveFiles <- handleListEvent ev $ lms ^. saveFiles
+      continue $ lms & saveFiles .~ newSaveFiles
+
+  CreateSave -> case e of
+    EvKey KEnter [] -> do
+      let svName = (lms ^. inputSaveName & formState) ^. saveNameTxt & T.unpack
+      liftIO $ saveGame $ initGame & saveName .~ svName
+      continue
+        $  lms
+        &  lmsCurMenu
+        .~ LoadMenu
+        &  saveFiles
+        %~ listSnoc svName
+        &  inputSaveName
+        %~ updateFormState (SaveName "")
+    _ -> do
+      newInputSaveName <- handleFormEvent e' $ lms ^. inputSaveName
+      continue $ lms & inputSaveName .~ newInputSaveName
+
+handleLoadMenuEvent lms _ = continue lms
+
+loadMenuApp :: App LoadMenuState LmsEvent LoadMenuName
+loadMenuApp = App
+  { appDraw         = drawLoadMenuUI
+  , appChooseCursor = showFirstCursor
+  , appHandleEvent  = handleLoadMenuEvent
+  , appStartEvent   = pure
+  , appAttrMap      = let niceColor = rgbColor 57 53 131
+                      in  const $ attrMap defAttr [("selected", bg niceColor)]
   }
 
 main :: IO ()
 main = do
+  createDirectoryIfMissing False saveDirectory
+
+  initial <- initLoadMenu
+  lms     <- defaultMain loadMenuApp initial
+
+  when (lms ^. quit) exitSuccess
+
   chan <- newBChan 10
 
   void $ forkIO $ forever $ do
@@ -152,4 +199,4 @@ main = do
 
   let buildVty = mkVty defaultConfig
   initialVty <- buildVty
-  void $ customMain initialVty buildVty (Just chan) app initGame
+  void $ customMain initialVty buildVty (Just chan) app $ lms ^. selectedSave

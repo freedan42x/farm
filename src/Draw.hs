@@ -1,9 +1,11 @@
 module Draw where
 
 import           Brick
+import           Brick.Forms
 import           Brick.Widgets.Center
 import           Brick.Widgets.Border
 import           Brick.Widgets.List
+import           Brick.Widgets.Dialog
 import           Brick.Widgets.ProgressBar
 import           Lens.Micro
 import qualified Data.Vector                   as V
@@ -32,7 +34,7 @@ selectedBorderLabel True label = overrideAttr borderAttr ("selected-menu")
   . borderWithLabel (withAttr "selected-menu" label)
 selectedBorderLabel False label = borderWithLabel label
 
-widgetIf :: Bool -> Widget Name -> Widget Name
+widgetIf :: Bool -> Widget n -> Widget n
 widgetIf True  = id
 widgetIf False = const emptyWidget
 
@@ -275,6 +277,16 @@ drawAlert :: Game -> Widget Name
 drawAlert game =
   marginTop (Pad 4) $ withAttr "alert" $ hCenterLayer $ str $ game ^. alertMsg
 
+drawQuit :: Game -> Widget Name
+drawQuit game =
+  overrideAttr buttonSelectedAttr "selected"
+    $ renderDialog (game ^. quitDialog)
+    $ vBox
+        [ hCenter $ str "Действительно выйти?"
+        , hCenter $ str "Прогресс будет сохранен"
+        , str " "
+        ]
+
 drawControls :: Widget Name
 drawControls = marginBottom (Pad 2) $ marginTop Max $ marginLeft (Pad 3) $ vBox
   [ str "Z/X           Выбрать/Отменить"
@@ -282,11 +294,13 @@ drawControls = marginBottom (Pad 2) $ marginTop Max $ marginLeft (Pad 3) $ vBox
   , str "Shift+[←↑→↓]  Смена фокуса"
   , str "[123]         Компонент алхимии"
   , str "C             Перки"
+  , str "Q             Выход"
   ]
 
 drawUI :: Game -> [Widget Name]
 drawUI game =
-  [ drawControls
+  [ widgetIf (game ^. curMenu == Quit) $ drawQuit game
+  , drawControls
   , drawAlert game
   , widgetIf (game ^. curMenu == Perks) $ centerLayer $ drawPerks game
   , widgetIf (game ^. curMenu == Plant)
@@ -303,3 +317,29 @@ drawUI game =
     , padLeft (Pad 2) $ drawAlchemy game
     ]
   ]
+
+drawChooseSave :: LoadMenuState -> Widget LoadMenuName
+drawChooseSave lms =
+  overrideAttr listSelectedFocusedAttr "selected"
+    $ setAvailableSize (29, 11)
+    $ borderWithLabel (str "Выберите сохранение")
+    $ vBox
+        [ renderList draw True (lms ^. saveFiles)
+        , widgetIf (lms ^. lmsCurMenu == CreateSave)
+        $  renderForm
+        $  lms
+        ^. inputSaveName
+        ]
+  where draw _ fp = hCenter $ str fp
+
+drawLmsControls :: Widget LoadMenuName
+drawLmsControls =
+  marginBottom (Pad 2) $ marginTop Max $ marginLeft (Pad 3) $ vBox
+    [ str "Z/Enter       Выбрать"
+    , str "[↑↓]          Навигация"
+    , str "M             Создать новое сохранение"
+    , str "Q             Выход"
+    ]
+
+drawLoadMenuUI :: LoadMenuState -> [Widget LoadMenuName]
+drawLoadMenuUI lms = [drawLmsControls, border $ center $ drawChooseSave lms]
