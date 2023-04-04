@@ -30,7 +30,7 @@ executable farm
                      , TypeSynonymInstances
                      , FlexibleInstances
   build-depends:       base >=4.12 && <4.13
-                     , brick
+                     , brick == 0.73
                      , vty
                      , microlens
                      , microlens-th
