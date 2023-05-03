@@ -2,4 +2,5 @@
 
 To play, use `cabal run`
 
-![](preview.gif)
+Preview:
+![Preview](preview.gif)
